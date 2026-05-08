@@ -16,7 +16,7 @@ name = "kenosis"
 path = "src/main.rs"
 
 [dependencies]
-kenosis-core = { path = "../../crates/kenosis-core", version = "0.3.4", features = ["calibrate"] }
+kenosis-core = { path = "../../crates/kenosis-core", version = "0.4.0", features = ["calibrate"] }
 ort = { version = "2.0.0-rc.12", features = ["ndarray"] }
 clap = { version = "4", features = ["derive"] }
 comfy-table = "7"
