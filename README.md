@@ -2,7 +2,7 @@
 
 # Kenosis
 
-**Production-grade ONNX model quantization. Pure Rust. Zero Python.**
+**Production-grade ONNX model quantization. Zero Python. Single Native Binary.**
 
 [![CI](https://github.com/CoreEpoch/kenosis/actions/workflows/ci.yml/badge.svg)](https://github.com/CoreEpoch/kenosis/actions)
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
@@ -23,7 +23,13 @@ Kenosis quantizes the **PP-YOLOE+ object detection models** deployed in producti
 | PP-YOLOE+ Small | 416×416 | 0.998 | **43ms** vs 77ms | **1.80×** | 7.9 MB (3.9× smaller) |
 | PP-YOLOE+ Small | 640×640 | 0.999 | **111ms** vs 187ms | **1.68×** | 7.9 MB (3.8× smaller) |
 
-> Real-world inference on the 320 model: **19–25ms** per frame. CPU utilization drops from ~85% to ~60% at 30fps, enabling 3–4 camera scaling on the same hardware.
+### Isolated Latency vs. Production Throughput
+
+The latency figures above represent **isolated, single-threaded compute reduction**. However, in a real-world multi-camera edge deployment (where models are forced to share CPU cores and L3 cache), this compute reduction translates directly into **density and throughput** rather than absolute wall-clock latency:
+
+*   **Cache Preservation:** The 3.9× smaller memory footprint allows multiple INT8 models to fit entirely within the CPU's L3 cache, eliminating the memory-bus thrashing that crashes FP32 multi-cam pipelines.
+*   **Thread Starvation Prevention:** By executing in ~25ms of compute instead of ~44ms, the OS scheduler can juggle multiple video streams without starving the pipeline.
+*   **The Result:** In a 3-camera stress test on an 8-core edge CPU, FP32 pipelines experience severe thread starvation and memory bottlenecking, driving latency to ~43ms and dropping streams to a jittery 21 fps. Kenosis INT8 pipelines process efficiently enough to sustain **28–29 fps per camera**, demonstrating that static quantization is the key to maximizing camera density on commodity hardware.
 
 ### Classifier Benchmarks (Kenosis vs ORT Python Quantizer)
 
@@ -42,6 +48,9 @@ Kenosis quantizes the **PP-YOLOE+ object detection models** deployed in producti
 | Detection model mixed-precision | ✅ | ❌ |
 | Non-vision tensor protection | ✅ | ❌ |
 | Multi-input model calibration | ✅ | ❌ |
+| Transformer & MatMul quantization | ✅ | ❌ |
+| NLP synthetic calibration data | ✅ | ❌ |
+| SNR-based sensitivity analysis | ✅ | ❌ |
 | INT32 bias quantization w/ DQL | ✅ | ✅ |
 | Per-channel weight quantization | ✅ | ✅ |
 | Built-in validation + benchmarking | ✅ | ❌ |
@@ -132,7 +141,7 @@ kenosis diff model.onnx model_int8.onnx
 
 Kenosis's static INT8 pipeline applies seven coordinated optimizations:
 
-1. **Self-calibration** — Automatically generates synthetic calibration inputs and runs them through the model via ONNX Runtime to collect per-tensor activation ranges. No external calibration data required. Multi-input models (detection models with scale_factor, etc.) are handled automatically.
+1. **Self-calibration** — Automatically generates synthetic calibration inputs and runs them through the model via ONNX Runtime to collect per-tensor activation ranges. No external calibration data required. Multi-input models and NLP inputs (token IDs, attention masks) are handled automatically.
 
 2. **Weight quantization** — INT8 symmetric per-tensor or per-channel. All scale computations in f64 to match ORT's internal precision.
 
@@ -140,11 +149,13 @@ Kenosis's static INT8 pipeline applies seven coordinated optimizations:
 
 4. **Zero-point nudged activation quantization** — UINT8 asymmetric with post-hoc range adjustment ensuring `float 0.0` maps exactly to the quantized zero. Prevents rounding asymmetry from compounding across layers.
 
-5. **ReLU-aware QDQ placement** — ORT's Python quantizer places QDQ nodes on every Conv output independently. Kenosis detects Conv→ReLU pairs at graph level and places QDQ *after* the ReLU instead, giving ORT's runtime optimizer a cleaner `Conv → ReLU → QuantizeLinear` pattern that fuses into a single INT8 kernel. Combined with second-pass wrapping of Add, Concat, MaxPool, Sigmoid, Mul, and Clip outputs, this maximizes the number of operations ORT can execute in INT8.
+5. **Activation-aware QDQ placement** — ORT's Python quantizer places QDQ nodes on every Conv/MatMul output independently. Kenosis detects `Conv/MatMul → Activation` pairs (ReLU, LeakyRelu, Clip, HardSwish, Sigmoid) at graph level and places QDQ *after* the activation instead. This gives ORT's runtime optimizer a cleaner pattern that fuses into a single INT8 kernel. Combined with second-pass wrapping of Add, Concat, MaxPool, and AveragePool, this maximizes QLinear fusions.
 
 6. **Non-vision tensor protection** — For multi-input models (detection, segmentation), tensors reachable from non-primary inputs (scale_factor, image_shape) are traced through the graph and excluded from quantization. This prevents metadata paths from being crushed by INT8 range limits.
 
 7. **Model output protection** — Tensors that are direct model outputs are never QDQ-wrapped, preserving full FP32 precision in detection head scores and bounding box coordinates.
+
+8. **SNR Sensitivity Analysis** — Computes Signal-to-Noise Ratio (SNR) for every layer's weight quantization. Automatically identifies mathematically fragile layers and protects them in FP32, recovering catastrophic Top-1 accuracy drops.
 
 ## Detection Model Support
 

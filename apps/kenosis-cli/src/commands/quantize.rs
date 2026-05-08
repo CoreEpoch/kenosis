@@ -40,6 +40,16 @@ pub struct QuantizeArgs {
     /// Required for models that embed weights as Constant ops (e.g. PaddlePaddle).
     #[arg(long)]
     extract_constants: bool,
+
+    /// Run ORT Level1 graph optimization before quantizing.
+    /// Folds BatchNorm into Conv, simplifies constants, removes dead branches.
+    #[arg(long)]
+    pre_optimize: bool,
+
+    /// Run sensitivity analysis and auto-skip accuracy-sensitive layers.
+    /// Specify the SNR threshold in dB (default: 25). Lower = more aggressive.
+    #[arg(long)]
+    sensitivity: Option<f64>,
 }
 
 pub fn run(args: QuantizeArgs) -> kenosis_core::Result<()> {
@@ -72,6 +82,32 @@ pub fn run(args: QuantizeArgs) -> kenosis_core::Result<()> {
         }
     }
 
+    // Run sensitivity analysis if requested
+    let skip_layers = if let Some(threshold) = args.sensitivity {
+        pb.set_message("Running sensitivity analysis...");
+        let (results, skip_set) =
+            kenosis_core::static_int8::sensitivity_analysis(&model, threshold);
+        if !skip_set.is_empty() {
+            println!(
+                "  {} Sensitivity: skipping {} of {} layers (SNR < {:.0} dB)",
+                "▸".cyan(),
+                skip_set.len().to_string().yellow(),
+                results.len(),
+                threshold,
+            );
+        } else {
+            println!(
+                "  {} Sensitivity: all {} layers pass (SNR ≥ {:.0} dB)",
+                "▸".cyan(),
+                results.len(),
+                threshold,
+            );
+        }
+        Some(skip_set)
+    } else {
+        None
+    };
+
     pb.set_message(format!(
         "Static INT8 QDQ: calibrating activations ({} samples)...",
         args.n_calib
@@ -82,6 +118,8 @@ pub fn run(args: QuantizeArgs) -> kenosis_core::Result<()> {
         args.per_channel,
         args.n_calib,
         args.calib_dir.as_deref(),
+        args.pre_optimize,
+        skip_layers,
     )?;
 
     pb.set_message("Saving...");
@@ -108,15 +146,20 @@ pub fn run(args: QuantizeArgs) -> kenosis_core::Result<()> {
     );
     println!("  {} Saved to {}", "→".dimmed(), args.output.display());
     println!(
-        "  {} Wrapped {} Conv nodes with QDQ ({} activation tensors calibrated)",
+        "  {} Wrapped {} Conv + {} MatMul nodes with QDQ ({} activation tensors calibrated)",
         ">".cyan(),
         stats.conv_replaced.to_string().green(),
+        stats.matmul_replaced.to_string().green(),
         stats.activation_tensors_calibrated,
     );
-    println!(
-        "  {} Pure Rust — no Python dependency. Runs on stock ORT.\n",
-        ">".cyan(),
-    );
+    if stats.sensitivity_layers_skipped > 0 {
+        println!(
+            "  {} Skipped {} sensitive layers (kept in FP32)",
+            ">".cyan(),
+            stats.sensitivity_layers_skipped.to_string().yellow(),
+        );
+    }
+
 
     Ok(())
 }
