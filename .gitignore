@@ -1,0 +1,36 @@
+# ── Build artifacts ─────────────────────────────────────
+/target
+
+# ── Release packaging ──────────────────────────────────
+/release/
+*.zip
+
+# ── ONNX model files (large binaries) ──────────────────
+*.onnx
+!tests/fixtures/*.onnx
+
+# ── Benchmark / calibration data ───────────────────────
+benchmarks/calib_data/
+benchmarks/*.log
+benchmarks/_*.py
+
+# ── Dev / scratch scripts (root-level) ─────────────────
+analyze_*.py
+bench_*.py
+kenosis_quantize.py
+
+# ── IDE / OS junk ──────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+Thumbs.db
+.DS_Store
+
+# ── Rust / Cargo ───────────────────────────────────────
+**/*.rs.bk
+*.pdb
+
+# ── LSP / tool cache ──────────────────────────────────
+.lsmcp/
