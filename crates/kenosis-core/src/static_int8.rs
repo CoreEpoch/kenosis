@@ -259,7 +259,6 @@ fn calibrate_activations(
     let actual_n = external_data.as_ref().map_or(n_calib, |d| d.len());
     tracing::info!(input = %input_name, shape = ?shape, n_calib = actual_n, "Starting calibration");
 
-
     // Collect info about all inputs (type, shape, name) for multi-input models
     struct InputInfo {
         name: String,
@@ -315,9 +314,7 @@ fn calibrate_activations(
                         .collect()
                 };
                 let t = Tensor::from_array((inp.shape.clone(), int_data))
-                    .map_err(|e| {
-                        crate::KenosisError::InvalidModel(format!("int tensor: {e}"))
-                    })?;
+                    .map_err(|e| crate::KenosisError::InvalidModel(format!("int tensor: {e}")))?;
                 inputs_map.insert(inp.name.clone(), ort::value::DynValue::from(t));
             } else {
                 // Float data — use external calibration or synthetic Gaussian
@@ -347,9 +344,7 @@ fn calibrate_activations(
                 }
 
                 let t = Tensor::from_array((inp.shape.clone(), data))
-                    .map_err(|e| {
-                        crate::KenosisError::InvalidModel(format!("tensor: {e}"))
-                    })?;
+                    .map_err(|e| crate::KenosisError::InvalidModel(format!("tensor: {e}")))?;
                 inputs_map.insert(inp.name.clone(), ort::value::DynValue::from(t));
             }
         }
@@ -613,8 +608,7 @@ pub fn pre_optimize_graph(model: OnnxModel) -> crate::Result<OnnxModel> {
 
     // Serialize → run through ORT Level1 → save optimized → reload
     let tmp_dir = std::env::temp_dir().join("kenosis_preopt");
-    std::fs::create_dir_all(&tmp_dir)
-        .map_err(crate::KenosisError::Io)?;
+    std::fs::create_dir_all(&tmp_dir).map_err(crate::KenosisError::Io)?;
     let input_path = tmp_dir.join("input.onnx");
     let output_path = tmp_dir.join("optimized.onnx");
 
@@ -698,8 +692,10 @@ pub fn quantize_static_int8(
     // For these, we skip Conv output QDQ and let the activation pass add it instead.
     // This matches ORT's fused Conv+Activation QDQ placement patterns:
     //   Conv→Relu, Conv→Clip (ReLU6), Conv→LeakyRelu, Conv→Sigmoid, Conv→HardSwish
-    let activation_ops: HashSet<&str> =
-        ["Relu", "Clip", "LeakyRelu", "Sigmoid", "HardSwish"].iter().copied().collect();
+    let activation_ops: HashSet<&str> = ["Relu", "Clip", "LeakyRelu", "Sigmoid", "HardSwish"]
+        .iter()
+        .copied()
+        .collect();
     let conv_activation_set: HashSet<String> = {
         let conv_outputs: HashSet<String> = graph
             .node
@@ -1041,7 +1037,11 @@ pub fn quantize_static_int8(
             continue;
         }
         // Skip if model output
-        if node.output.first().is_some_and(|o| model_output_names.contains(o)) {
+        if node
+            .output
+            .first()
+            .is_some_and(|o| model_output_names.contains(o))
+        {
             continue;
         }
         // Skip layers flagged by sensitivity analysis
@@ -1395,16 +1395,16 @@ pub fn quantize_static_int8(
     let graph = model.graph_mut();
     let qdq_ops = [
         "Relu",
-        "LeakyRelu",  // YOLOv3/v4, Darknet architectures
-        "Add",        // Residual connections (ResNet, EfficientNet) → QLinearAdd
+        "LeakyRelu", // YOLOv3/v4, Darknet architectures
+        "Add",       // Residual connections (ResNet, EfficientNet) → QLinearAdd
         "Concat",
         "MaxPool",
         "AveragePool",
         "GlobalAveragePool",
-        "Mul",        // SE-block channel scaling (MobileNetV3, EfficientNet)
-        "Sigmoid",    // SE-block attention (MobileNetV3, EfficientNet)
-        "Clip",       // ReLU6 in MobileNetV2/V3 (Clip(0,6))
-        "HardSwish",  // MobileNetV3
+        "Mul",       // SE-block channel scaling (MobileNetV3, EfficientNet)
+        "Sigmoid",   // SE-block attention (MobileNetV3, EfficientNet)
+        "Clip",      // ReLU6 in MobileNetV2/V3 (Clip(0,6))
+        "HardSwish", // MobileNetV3
     ];
     let mut extra_inits: Vec<TensorProto> = Vec::new();
     let mut wrapped_nodes: Vec<NodeProto> = Vec::new();

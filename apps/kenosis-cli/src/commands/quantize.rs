@@ -160,6 +160,5 @@ pub fn run(args: QuantizeArgs) -> kenosis_core::Result<()> {
         );
     }
 
-
     Ok(())
 }
