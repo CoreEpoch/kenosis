@@ -1,0 +1,26 @@
+[package]
+name = "kenosis-core"
+description = "Pure-Rust ONNX model optimization toolkit — static INT8 quantization, precision casting, and model analysis"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+readme = "../../README.md"
+rust-version = "1.79"
+keywords = ["onnx", "quantization", "ml", "optimization", "deep-learning"]
+categories = ["science", "compression", "command-line-utilities"]
+exclude = ["tests/", "benchmarks/"]
+
+[features]
+default = ["calibrate"]
+calibrate = ["dep:ort", "dep:ndarray_017"]
+
+[dependencies]
+prost = "0.13"
+thiserror = "2"
+tracing = "0.1"
+ndarray = "0.16"
+half = { version = "2", features = ["std"] }
+ort = { version = "2.0.0-rc.12", features = ["ndarray"], optional = true }
+ndarray_017 = { package = "ndarray", version = "0.17", optional = true }
