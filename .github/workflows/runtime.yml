@@ -1,0 +1,68 @@
+name: Build Runtime
+
+on:
+  push:
+    paths:
+      - 'runtime/**'
+  pull_request:
+    paths:
+      - 'runtime/**'
+  workflow_dispatch:
+
+env:
+  ORT_VERSION: "1.18.1"
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            ort_url: "https://github.com/microsoft/onnxruntime/releases/download/v1.18.1/onnxruntime-win-x64-1.18.1.zip"
+            lib_ext: dll
+            cmake_extra: "-A x64"
+          - os: ubuntu-latest
+            ort_url: "https://github.com/microsoft/onnxruntime/releases/download/v1.18.1/onnxruntime-linux-x64-1.18.1.tgz"
+            lib_ext: so
+            cmake_extra: ""
+          - os: macos-latest
+            ort_url: "https://github.com/microsoft/onnxruntime/releases/download/v1.18.1/onnxruntime-osx-arm64-1.18.1.tgz"
+            lib_ext: dylib
+            cmake_extra: ""
+
+    runs-on: ${{ matrix.os }}
+    name: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download ONNX Runtime SDK
+        shell: bash
+        run: |
+          mkdir -p ort_sdk
+          if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
+            curl -sL "${{ matrix.ort_url }}" -o ort.zip
+            unzip -q ort.zip -d ort_sdk
+            mv ort_sdk/onnxruntime-*/* ort_sdk/ || true
+          else
+            curl -sL "${{ matrix.ort_url }}" -o ort.tar.gz
+            tar xzf ort.tar.gz -C ort_sdk --strip-components=1
+          fi
+
+      - name: Configure CMake
+        run: |
+          cmake -B build -S runtime \
+            -DONNXRUNTIME_ROOT=${{ github.workspace }}/ort_sdk \
+            -DCMAKE_BUILD_TYPE=Release \
+            ${{ matrix.cmake_extra }}
+
+      - name: Build
+        run: cmake --build build --config Release
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: kenosis-runtime-${{ matrix.os }}
+          path: |
+            build/Release/*.${{ matrix.lib_ext }}
+            build/*.${{ matrix.lib_ext }}
