@@ -13,6 +13,8 @@
 
 Kenosis is a Rust CLI toolkit for quantizing, validating, inspecting, and comparing ONNX models. Its flagship feature is **static INT8 quantization** with ReLU-aware QDQ placement that achieves full QLinearConv fusion on stock ONNX Runtime — no custom operators required.
 
+> **Read the Technical Whitepaper:** [Activation-Aware Quantization: Achieving Native Kernel Fusion in ONNX via Graph Reordering](docs/whitepaper.md)
+
 ## Production Results
 
 Kenosis quantizes the **PP-YOLOE+ object detection models** deployed in production edge AI pipelines, delivering production-validated performance gains:
