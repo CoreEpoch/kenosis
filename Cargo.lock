@@ -477,7 +477,7 @@ dependencies = [
 
 [[package]]
 name = "kenosis-cli"
-version = "0.4.0"
+version = "1.0.0"
 dependencies = [
  "clap",
  "comfy-table",
@@ -491,7 +491,7 @@ dependencies = [
 
 [[package]]
 name = "kenosis-core"
-version = "0.4.0"
+version = "1.0.0"
 dependencies = [
  "half",
  "ndarray 0.16.1",
