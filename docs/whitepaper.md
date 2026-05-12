@@ -106,7 +106,7 @@ We validated the Kenosis pipeline against standard FP32 baselines using an Intel
 |--------------|-----------|-----------|--------------|--------------|---------|----------------|------------|
 | SqueezeNet 1.1 | 4.73 MB | 1.24 MB | 13.35ms | 5.62ms | **2.37×** | 92% | 0.9990 |
 | ResNet50 v2 | 97.70 MB | 30.70 MB | 141.99ms | 74.74ms | **1.90×** | **100%** | 0.9954 |
-| PP-YOLOE+ | 32.2 MB | 8.24 MB | - | - | **1.89×** | N/A | 0.9980 |
+| PP-YOLOE+ (320) | 32.2 MB | 7.9 MB | 44ms | 23ms | **1.89×** | N/A | 0.9980 |
 
 ### Observations
 1. **Latency Reduction:** The graph reordering translates directly to wall-clock speedups approaching the theoretical INT8 maximum of 4×, bounded primarily by memory bandwidth.
