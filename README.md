@@ -25,18 +25,28 @@ Kenosis quantizes the **PP-YOLOE+ object detection models** deployed in producti
 | PP-YOLOE+ Small | 416×416 | 0.998 | **43ms** vs 77ms | **1.80×** | 7.9 MB (3.9× smaller) |
 | PP-YOLOE+ Small | 640×640 | 0.999 | **111ms** vs 187ms | **1.68×** | 7.9 MB (3.8× smaller) |
 
-### Isolated Latency vs. Production Throughput
+### Production Pipeline — Dual-Camera Deployment
 
-The latency figures above represent **isolated, single-threaded compute reduction**. However, in a real-world multi-camera edge deployment (where models are forced to share CPU cores and L3 cache), this compute reduction translates directly into **density and throughput** rather than absolute wall-clock latency:
+Isolated latency benchmarks mask a critical dimension of quantization quality: **CPU efficiency under multi-threaded production load**. When ORT is given a thread pool, both FP32 and INT8 models execute as fast as the hardware allows — wall-clock latency converges because the thread pool saturates. What diverges is *how hard the CPU works* to achieve that throughput.
 
-*   **Cache Preservation:** The 3.9× smaller memory footprint allows multiple INT8 models to fit entirely within the CPU's L3 cache, eliminating the memory-bus thrashing that crashes FP32 multi-cam pipelines.
-*   **Thread Starvation Prevention:** By executing in ~25ms of compute instead of ~44ms, the OS scheduler can juggle multiple video streams without starving the pipeline.
-*   **The Result:** In a 3-camera stress test on an 8-core edge CPU, FP32 pipelines experience severe thread starvation and memory bottlenecking, driving latency to ~43ms and dropping streams to a jittery 21 fps. Kenosis INT8 pipelines process efficiently enough to sustain **28–29 fps per camera**, demonstrating that static quantization is the key to maximizing camera density on commodity hardware.
+The following results were captured from a dual-camera headless pipeline (PP-YOLOE+ Small 320×320, 640×480 @ 30fps, 4 ORT threads/camera on 8 physical cores):
+
+| Metric | FP32 Baseline | ORT Python INT8 | Kenosis INT8 |
+|--------|--------------|-----------------|--------------|
+| FPS (cam-0 / cam-1) | 29.5 / 30.1 | 22.5 / 22.7 | **29.5 / 30.1** |
+| Avg Inference Latency | 21.6 ms | 43.8 ms | **20.7 ms** |
+| CPU Utilization | ~53% | ~60% | **~41%** |
+| Working Set Memory | 158.4 MB | 300.0 MB | **118.3 MB** |
+| Model File Size | 30.4 MB | 30.7 MB | **7.9 MB** |
+
+Kenosis INT8 matches FP32 throughput exactly (30 fps, zero drops) while reducing CPU utilization by **22%** and working memory by **25%**. On fixed hardware, freed CPU capacity translates directly into additional concurrent camera streams without hardware upgrades.
+
+The ORT Python quantizer cannot sustain the capture rate (22.5 fps vs 29.5 fps), uses **13% more CPU than FP32**, consumes **89% more memory**, and produces a model file **larger** than the FP32 original.
 
 ### Classifier Benchmarks (Kenosis INT8 vs FP32 Baseline)
 
 | Model | Cosine | Kenosis INT8 | FP32 Baseline | Speedup | INT8 Size |
-|-------|--------|--------------|---------------|---------|-----------|
+|-------|--------|--------------|---------------|---------|-----------
 | SqueezeNet 1.1 | 0.999 | **2.85ms** | 6.60ms | **2.32×** | 1.24 MB (3.8× smaller) |
 | ResNet50 v2 | 0.995 | **27.8ms** | 68.4ms | **2.46×** | 30.6 MB (3.2× smaller) |
 | MobileNetV2 | 0.990 | **4.61ms** | 6.53ms | **1.42×** | 7.10 MB (1.9× smaller) |
