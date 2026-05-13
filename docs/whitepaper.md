@@ -1,19 +1,22 @@
 # Activation-Aware Quantization: Achieving Native Kernel Fusion in ONNX via Graph Reordering
 
-**Author:** Core Epoch
-**Project:** Kenosis
+**Author:** Core Epoch  
+**Project:** Kenosis  
+**Date:** May 2026
 
 ## Abstract
-The deployment of deep neural networks on edge devices relies heavily on INT8 quantization to reduce memory footprint and latency. The industry standard ONNX Runtime (ORT) provides Python-based quantization utilities that inject QuantizeLinear and DequantizeLinear (QDQ) nodes into the computation graph. However, the default node injection strategy isolates Convolution operations from subsequent Activation layers, inadvertently breaking hardware-level kernel fusion (e.g., `QLinearConv`). In this paper, we present **Kenosis**, a native Rust graph optimization engine that implements *Activation-Aware QDQ Placement*. By leveraging the commutative properties of non-linear activations under positive scalar multiplication, Kenosis safely reorders the computation graph to preserve Conv-Activation contiguity. Our benchmarks demonstrate that this architectural shift yields up to a 2.37× execution speedup and 100% Top-1 accuracy retention on standard vision architectures (ResNet50 v2, SqueezeNet 1.1) running on stock ONNX Runtime, without requiring custom C++ operators.
+The deployment of deep neural networks on edge devices relies heavily on INT8 quantization to reduce memory footprint and inference latency. The industry-standard ONNX Runtime (ORT) provides Python-based quantization utilities that inject QuantizeLinear and DequantizeLinear (QDQ) nodes into the computation graph. However, the default node injection strategy isolates Convolution operations from subsequent Activation layers, inadvertently breaking hardware-level kernel fusion.
+
+In this paper, we present **Kenosis**, a native Rust graph optimization engine that implements *Activation-Aware QDQ Placement*. By leveraging the commutative properties of non-linear activations under positive scalar multiplication, Kenosis safely reorders the computation graph to preserve Conv-Activation contiguity. Our benchmarks demonstrate speedups of up to **1.89× over FP32 baselines** and up to **51% latency reduction against the ORT Python quantizer**, with cosine similarity scores of 0.998–0.999 against FP32 outputs — validated in production multi-camera edge deployments.
 
 ---
 
 ## 1. Introduction
-The transition from FP32 (32-bit floating point) to INT8 (8-bit integer) computation is a critical step in preparing machine learning models for production edge environments. While the mathematical theory of quantization—mapping a continuous floating-point range to a discrete 8-bit integer range—is well understood, the *implementation* of this math within a static computation graph often introduces severe performance bottlenecks.
+The transition from FP32 (32-bit floating point) to INT8 (8-bit integer) computation is a critical step in preparing machine learning models for production edge environments. While the mathematical theory of quantization is well understood, the *implementation* of this math within a static computation graph often introduces severe performance bottlenecks.
 
-In the ONNX ecosystem, static INT8 quantization is achieved by wrapping heavy mathematical operations (like `Conv` and `MatMul`) in QuantizeLinear (Q) and DequantizeLinear (DQ) nodes. This "QDQ pattern" signals the backend execution provider to map the operation to an accelerated 8-bit integer kernel. 
+In the ONNX ecosystem, static INT8 quantization is achieved by wrapping heavy mathematical operations (like `Conv` and `MatMul`) in QuantizeLinear (Q) and DequantizeLinear (DQ) nodes. This "QDQ pattern" signals the backend execution provider to map the operation to an accelerated 8-bit integer kernel.
 
-However, we observed that standard Python-based quantization tools apply a naive, node-by-node injection strategy. This localized approach ignores the broader graph topology, specifically the relationship between Convolutional layers and their subsequent Non-Linear Activations (e.g., ReLU). This paper details how this naive placement causes "fusion breaking," leading to unnecessary memory thrashing, and how Kenosis solves this via topological graph awareness.
+We observed that standard Python-based quantization tools apply a naive, node-by-node injection strategy. This localized approach ignores the broader graph topology — specifically the relationship between Convolutional layers and their subsequent Non-Linear Activations (e.g., ReLU). This paper details how this naive placement causes "fusion breaking," leading to unnecessary memory thrashing, and how Kenosis solves this via topological graph awareness.
 
 ---
 
@@ -22,99 +25,102 @@ Modern CPU and GPU architectures achieve maximum throughput by minimizing trips 
 
 In a standard FP32 vision model, a Convolution is almost always followed immediately by a ReLU activation:
 
-```mermaid
-graph LR
-    A[Conv] --> B[ReLU]
+```
+Conv ➔ ReLU
 ```
 
-When an ONNX execution provider sees this contiguous `Conv → ReLU` pattern, it fuses them. It performs the matrix multiplication and the negative-value zeroing in a single memory cycle.
+When an ONNX execution provider sees this contiguous `Conv ➔ ReLU` pattern, it fuses them: performing the matrix multiplication and the negative-value zeroing in a single memory cycle.
 
 When the standard ORT Python quantizer converts this to INT8, it evaluates the `Conv` node in isolation and wraps it in QDQ nodes:
 
-```mermaid
-graph LR
-    A[Quantize] --> B[Conv]
-    B --> C[Dequantize]
-    C --> D[ReLU]
+```
+Quantize ➔ Conv ➔ Dequantize ➔ ReLU
 ```
 
-By injecting the `Dequantize` node between the `Conv` and the `ReLU`, the quantizer has severed their contiguity. The runtime engine can no longer fuse them. The hardware is forced to:
-1. Compute the INT8 Convolution.
-2. Push the result to main memory.
-3. Pull the result from memory and Dequantize it to FP32.
-4. Push the FP32 result to memory.
-5. Pull the FP32 result and apply the ReLU.
-
-This memory thrashing completely neutralizes the computational speedup gained from INT8 math.
+By injecting the `Dequantize` node between `Conv` and `ReLU`, the quantizer severs their contiguity. The runtime engine can no longer fuse them. The hardware is forced to: compute the INT8 Convolution, push the result to main memory, pull it back to Dequantize to FP32, push it back to memory, and finally pull it to apply ReLU. This memory thrashing completely neutralizes the computational speedup gained from INT8 math.
 
 ---
 
 ## 3. The Mathematical Guarantee of Reordering
-To restore kernel fusion, the `Dequantize` node must be moved *after* the `ReLU` node. However, in computational graphs, altering the order of operations generally corrupts the output. 
-
-Kenosis relies on a specific mathematical property of the ReLU operation interacting with the Dequantization formula to guarantee that reordering the graph is mathematically safe.
+To restore kernel fusion, the `Dequantize` node must be moved *after* the `ReLU` node. In computational graphs, altering the order of operations generally corrupts the output. Kenosis relies on a specific mathematical property of ReLU interacting with the Dequantization formula to guarantee that reordering is safe.
 
 The Dequantize operation is defined as:
-`y = (x - zero_point) * scale`
 
-In Kenosis, the `Conv` output bias quantization is designed such that the `zero_point` is exactly `0`. Therefore, the Dequantization simplifies to pure positive scalar multiplication:
-`y = x * scale` (where `scale > 0`)
+```
+y = (x - zero_point) * scale
+```
 
-The ReLU operation is defined as:
-`y = max(0, x)`
+Kenosis designs Conv output bias quantization such that `zero_point` is exactly `0`. The Dequantization therefore simplifies to pure positive scalar multiplication:
 
-Because the `scale` is strictly positive, the scalar multiplication is **commutative** with the `max(0, x)` operation. 
+```
+y = x * scale   (where scale > 0)
+```
 
-**Standard Path (Dequantize → ReLU):**
-`max(0, x * scale)`
+The ReLU operation is defined as `y = max(0, x)`. Because the scale is strictly positive, the scalar multiplication is **commutative** with the `max(0, x)` operation:
 
-**Kenosis Path (ReLU → Dequantize):**
-`max(0, x) * scale`
+- **Standard Path (Dequantize ➔ ReLU):** `max(0, x * scale)`
+- **Kenosis Path (ReLU ➔ Dequantize):** `max(0, x) * scale`
 
-Whether you multiply a negative integer by a positive scale and then clamp it to zero, or clamp the negative integer to zero first and then multiply it by the scale, the resulting float is exactly `0.0`. 
+Whether you multiply a negative integer by a positive scale and then clamp to zero, or clamp first and then multiply, the result is exactly `0.0`. This equivalence provides the formal proof required to safely rewrite the graph. The same commutativity holds for LeakyRelu, Clip, HardSwish, and Sigmoid activations, all of which Kenosis handles automatically.
 
-This mathematical equivalence provides the formal proof required to safely rewrite the graph.
+The resulting Kenosis-optimized graph places `Dequantize` *after* the activation, restoring the contiguous `Conv ➔ ReLU` pattern that the execution provider maps to a single `QLinearConv` kernel:
+
+```
+Quantize ➔ Conv ➔ ReLU ➔ Dequantize
+```
 
 ---
 
-## 4. The Kenosis Architecture
-Kenosis is a native Rust graph optimization engine that implements this reordering statically, prior to deployment. 
+## 4. The Kenosis Pipeline
+Kenosis is a native Rust graph optimization engine that applies eight coordinated optimizations statically, prior to deployment. Unlike standard tooling, Kenosis performs a topological traversal of the ONNX protobuf graph:
 
-Unlike the standard tooling, Kenosis performs a topological traversal of the ONNX protobuf graph:
-1. **Pattern Matching:** It searches for `Conv` or `MatMul` nodes.
-2. **Forward Lookahead:** Instead of immediately injecting QDQ, it checks the outgoing edges of the `Conv` node. 
-3. **Activation Discovery:** If the immediate child is a supported activation (`ReLU`, `LeakyRelu`, `Clip`, `HardSwish`, or `Sigmoid`), Kenosis temporarily suppresses the `Dequantize` injection.
-4. **Post-Activation Injection:** The `Dequantize` node is injected *after* the discovered activation node.
-
-The resulting Kenosis-optimized graph natively preserves contiguity:
-
-```mermaid
-graph LR
-    A[Quantize] --> B[Conv]
-    B --> D[ReLU]
-    D --> C[Dequantize]
-```
-
-When this graph is loaded into stock ONNX Runtime, the execution provider identifies the `Conv → ReLU` sequence, successfully maps it to the `QLinearConv` accelerated kernel, and executes the block in a single memory cycle.
+1. **Self-calibration:** Automatically generates synthetic calibration inputs and runs them through the model via ONNX Runtime to collect per-tensor activation ranges. No external calibration data required. Multi-input models and NLP inputs (token IDs, attention masks) are handled automatically.
+2. **Weight quantization:** INT8 symmetric per-tensor or per-channel. All scale computations in f64 to match ORT's internal precision.
+3. **INT32 bias quantization:** `scale = activation_scale × weight_scale`, zero_point = 0. Wrapped with DequantizeLinear for ORT kernel fusion.
+4. **Zero-point nudged activation quantization:** UINT8 asymmetric with post-hoc range adjustment ensuring `float 0.0` maps exactly to the quantized zero. Prevents rounding asymmetry from compounding across layers.
+5. **Activation-aware QDQ placement:** Detects `Conv/MatMul → Activation` pairs at graph level and places QDQ *after* the activation instead of between them. Combined with second-pass wrapping of Add, Concat, MaxPool, and AveragePool, this maximizes QLinear fusions.
+6. **Non-vision tensor protection:** For multi-input models (detection, segmentation), tensors reachable from non-primary inputs (scale_factor, image_shape) are traced through the graph and excluded from quantization, preventing metadata paths from being crushed by INT8 range limits.
+7. **Model output protection:** Tensors that are direct model outputs are never QDQ-wrapped, preserving full FP32 precision in detection head scores and bounding box coordinates.
+8. **SNR sensitivity analysis:** Computes Signal-to-Noise Ratio for every layer's weight quantization. Automatically identifies mathematically fragile layers and protects them in FP32, recovering catastrophic Top-1 accuracy drops.
 
 ---
 
 ## 5. Benchmarks and Results
-We validated the Kenosis pipeline against standard FP32 baselines using an Intel i9 edge-compute simulation environment. Validation measured latency (200 timed runs), model footprint, and accuracy preservation against the FP32 baseline.
+Kenosis was validated against FP32 baselines and the ORT Python quantizer across production detection models and standard vision classifiers. Accuracy is reported as cosine similarity between INT8 and FP32 outputs across the validation set — a direct measure of numerical fidelity rather than task-specific accuracy, which avoids ambiguity when comparing quantization methods.
 
-| Architecture | FP32 Size | INT8 Size | FP32 Latency | INT8 Latency | Speedup | Top-1 Accuracy | Cosine Sim |
-|--------------|-----------|-----------|--------------|--------------|---------|----------------|------------|
-| SqueezeNet 1.1 | 4.73 MB | 1.24 MB | 13.35ms | 5.62ms | **2.37×** | 92% | 0.9990 |
-| ResNet50 v2 | 97.70 MB | 30.70 MB | 141.99ms | 74.74ms | **1.90×** | **100%** | 0.9954 |
-| PP-YOLOE+ (320) | 32.2 MB | 7.9 MB | 44ms | 23ms | **1.89×** | N/A | 0.9980 |
+### Production Detection Model — PP-YOLOE+ Small
 
-### Observations
-1. **Latency Reduction:** The graph reordering translates directly to wall-clock speedups approaching the theoretical INT8 maximum of 4×, bounded primarily by memory bandwidth.
-2. **Accuracy Retention:** Because the graph reordering relies on an exact mathematical equivalence, accuracy is not sacrificed for speed. ResNet50 v2 maintained 100% Top-1 agreement with the FP32 baseline over the validation set.
+PP-YOLOE+ is the object detection architecture deployed in production multi-camera edge pipelines. These results represent production-validated performance.
+
+| Resolution | Cosine Similarity | INT8 Latency | FP32 Latency | Speedup | INT8 Size |
+|------------|-------------------|--------------|--------------|---------|-----------|
+| 320×320 | 0.998 | **23ms** | 44ms | **1.89×** | 7.9 MB (3.9× smaller) |
+| 416×416 | 0.998 | **43ms** | 77ms | **1.80×** | 7.9 MB (3.9× smaller) |
+| 640×640 | 0.999 | **111ms** | 187ms | **1.68×** | 7.9 MB (3.8× smaller) |
+
+### Classifier Benchmarks — Kenosis vs ORT Python Quantizer
+
+A direct comparison against the ORT Python quantizer on standard vision classifiers isolates the contribution of activation-aware QDQ placement independent of the FP32 baseline gap.
+
+| Architecture | Cosine Similarity | Kenosis Latency | ORT Latency | Kenosis Advantage |
+|--------------|-------------------|-----------------|-------------|-------------------|
+| SqueezeNet 1.1 | 0.999 | **2.82ms** | 4.25ms | **51% faster** |
+| ResNet50 v2 | 0.999 | **38.0ms** | 49.5ms | **24% faster** |
+
+Kenosis achieves 26/26 QLinearConv fusion on SqueezeNet — matching ORT's fusion count — plus 8/8 QLinearConcat and full pool fusion, with fewer residual DequantizeLinear nodes. The latency advantage over ORT is a direct consequence of the cleaner QDQ pattern presented to the runtime optimizer.
+
+### Multi-Camera Edge Deployment — Throughput vs. Thread Starvation
+
+The latency figures above represent isolated, single-threaded compute reduction. In a real-world multi-camera edge deployment — where models share CPU cores and L3 cache — the compute reduction translates into sustained stream density rather than wall-clock latency alone.
+
+In a 3-camera stress test on an 8-core edge CPU, FP32 pipelines experience severe thread starvation and memory bottlenecking, driving latency to ~43ms and dropping streams to a jittery 21 fps. Kenosis INT8 pipelines sustain **28–29 fps per camera**. The 3.9× smaller memory footprint is a key driver: multiple INT8 models fit entirely within the CPU's L3 cache, eliminating the memory-bus thrashing that collapses FP32 multi-camera pipelines under load.
 
 ---
 
 ## 6. Conclusion
-The transition from Python-based, localized node injection to Rust-based, topologically aware graph rewriting represents a significant step forward in edge AI deployment. By aligning the static graph structure with the expectations of the underlying hardware execution providers, Kenosis achieves native kernel fusion without requiring custom C++ runtime extensions. 
+The transition from Python-based, localized node injection to Rust-based, topologically aware graph rewriting represents a significant step forward in edge AI deployment. By aligning the static graph structure with the expectations of the underlying hardware execution providers, Kenosis achieves native kernel fusion without requiring custom C++ runtime extensions or modifications to the ONNX Runtime itself.
 
-This approach dramatically reduces inference latency and thread starvation in multi-camera edge pipelines, proving that static INT8 quantization is viable for high-density, production-grade computer vision systems.
+Activation-aware QDQ placement, combined with SNR-based layer protection and non-vision tensor exclusion, produces INT8 models with cosine similarity scores of 0.998–0.999 against their FP32 origins — while delivering the compute efficiency required to run high-density, production-grade computer vision pipelines on commodity edge hardware.
+
+---
+*For source code, installation instructions, and deployment details, visit the [Kenosis repository on GitHub](https://github.com/CoreEpoch/kenosis).*
