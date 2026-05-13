@@ -133,7 +133,7 @@ In a 3-camera stress test on an 8-core edge CPU, FP32 pipelines experience sever
 ## 6. Conclusion
 The transition from Python-based, localized node injection to Rust-based, topologically aware graph rewriting represents a significant step forward in edge AI deployment. By aligning the static graph structure with the expectations of the underlying hardware execution providers, Kenosis achieves native kernel fusion without requiring custom C++ runtime extensions or modifications to the ONNX Runtime itself.
 
-Activation-aware QDQ placement, combined with SNR-based layer protection and non-vision tensor exclusion, produces INT8 models with cosine similarity scores of 0.998–0.999 against their FP32 origins — while delivering the compute efficiency required to run high-density, production-grade computer vision pipelines on commodity edge hardware.
+Activation-aware QDQ placement, combined with SNR-based layer protection and non-vision tensor exclusion, produces INT8 models with cosine similarity scores of 0.983–0.999 against their FP32 origins — while delivering the compute efficiency required to run high-density, production-grade computer vision pipelines on commodity edge hardware.
 
 ---
 *For source code, installation instructions, and deployment details, visit the [Kenosis repository on GitHub](https://github.com/CoreEpoch/kenosis).*
