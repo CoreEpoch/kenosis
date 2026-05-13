@@ -7,7 +7,7 @@
 ## Abstract
 The deployment of deep neural networks on edge devices relies heavily on INT8 quantization to reduce memory footprint and inference latency. The industry-standard ONNX Runtime (ORT) provides Python-based quantization utilities that inject QuantizeLinear and DequantizeLinear (QDQ) nodes into the computation graph. However, the default node injection strategy isolates Convolution operations from subsequent Activation layers, inadvertently breaking hardware-level kernel fusion.
 
-In this paper, we present **Kenosis**, a native Rust graph optimization engine that implements *Activation-Aware QDQ Placement*. By leveraging the commutative properties of non-linear activations under positive scalar multiplication, Kenosis safely reorders the computation graph to preserve Conv-Activation contiguity. Our benchmarks demonstrate speedups of up to **1.89× over FP32 baselines** and up to **51% latency reduction against the ORT Python quantizer**, with cosine similarity scores of 0.998–0.999 against FP32 outputs — validated in production multi-camera edge deployments.
+In this paper, we present **Kenosis**, a native Rust graph optimization engine that implements *Activation-Aware QDQ Placement*. By leveraging the commutative properties of non-linear activations under positive scalar multiplication, Kenosis safely reorders the computation graph to preserve Conv-Activation contiguity. Our benchmarks across five architectures demonstrate speedups of up to **2.46× over FP32 baselines** and up to **65% latency reduction against the ORT Python quantizer**, with cosine similarity scores of 0.983–0.999 against FP32 outputs — validated in production multi-camera edge deployments.
 
 ---
 
@@ -86,7 +86,7 @@ Kenosis is a native Rust graph optimization engine that applies eight coordinate
 ---
 
 ## 5. Benchmarks and Results
-Kenosis was validated against FP32 baselines and the ORT Python quantizer across production detection models and standard vision classifiers. Accuracy is reported as cosine similarity between INT8 and FP32 outputs across the validation set — a direct measure of numerical fidelity rather than task-specific accuracy, which avoids ambiguity when comparing quantization methods.
+Kenosis was validated against FP32 baselines and the ORT Python quantizer across production detection models and standard vision classifiers. All benchmarks use single-threaded ORT execution with 200 timed iterations after 20 warmup runs. Accuracy is reported as cosine similarity between INT8 and FP32 outputs across the validation set — a direct measure of numerical fidelity rather than task-specific accuracy, which avoids ambiguity when comparing quantization methods.
 
 ### Production Detection Model — PP-YOLOE+ Small
 
@@ -98,16 +98,29 @@ PP-YOLOE+ is the object detection architecture deployed in production multi-came
 | 416×416 | 0.998 | **43ms** | 77ms | **1.80×** | 7.9 MB (3.9× smaller) |
 | 640×640 | 0.999 | **111ms** | 187ms | **1.68×** | 7.9 MB (3.8× smaller) |
 
-### Classifier Benchmarks — Kenosis vs ORT Python Quantizer
+### Classifier Benchmarks — Kenosis INT8 vs FP32 Baseline
 
-A direct comparison against the ORT Python quantizer on standard vision classifiers isolates the contribution of activation-aware QDQ placement independent of the FP32 baseline gap.
+Kenosis-quantized models benchmarked against their FP32 baselines on standard vision architectures. All models quantized with per-tensor symmetric INT8 weights and self-calibrated activations.
 
-| Architecture | Cosine Similarity | Kenosis Latency | ORT Latency | Kenosis Advantage |
-|--------------|-------------------|-----------------|-------------|-------------------|
-| SqueezeNet 1.1 | 0.999 | **2.82ms** | 4.25ms | **51% faster** |
-| ResNet50 v2 | 0.999 | **38.0ms** | 49.5ms | **24% faster** |
+| Architecture | Cosine Similarity | Kenosis INT8 | FP32 Baseline | Speedup | INT8 Size |
+|--------------|-------------------|--------------|---------------|---------|-----------|
+| SqueezeNet 1.1 | 0.999 | **2.85ms** | 6.60ms | **2.32×** | 1.24 MB (3.8× smaller) |
+| ResNet50 v2 | 0.995 | **27.8ms** | 68.4ms | **2.46×** | 30.6 MB (3.2× smaller) |
+| MobileNetV2 | 0.990 | **4.61ms** | 6.53ms | **1.42×** | 7.10 MB (1.9× smaller) |
+| EfficientNet-Lite4 | 0.983 | **14.2ms** | 26.8ms | **1.89×** | 16.5 MB (3.0× smaller) |
 
-Kenosis achieves 26/26 QLinearConv fusion on SqueezeNet — matching ORT's fusion count — plus 8/8 QLinearConcat and full pool fusion, with fewer residual DequantizeLinear nodes. The latency advantage over ORT is a direct consequence of the cleaner QDQ pattern presented to the runtime optimizer.
+### Direct Comparison — Kenosis vs ORT Python Quantizer
+
+A head-to-head comparison against the ORT Python quantizer isolates the contribution of activation-aware QDQ placement. Both quantizers use per-tensor INT8 with synthetic calibration data. The ORT quantizer uses `quantize_static` with QDQ format after `quant_pre_process`.
+
+| Architecture | Kenosis Latency | ORT Latency | Kenosis Advantage |
+|--------------|-----------------|-------------|-------------------|
+| SqueezeNet 1.1 | **2.85ms** | 8.13ms | **65% faster** |
+| ResNet50 v2 | **27.8ms** | 46.1ms | **40% faster** |
+| MobileNetV2 | **4.61ms** | 6.29ms | **27% faster** |
+| EfficientNet-Lite4 | **14.2ms** | 23.5ms | **40% faster** |
+
+Notably, the ORT Python quantizer produces a SqueezeNet model that is **slower than the FP32 baseline** (8.13ms INT8 vs 6.60ms FP32) — a direct consequence of broken Conv-ReLU fusion caused by naive QDQ placement. Kenosis eliminates this regression entirely, delivering a 2.32× speedup over FP32.
 
 ### Multi-Camera Edge Deployment — Throughput vs. Thread Starvation
 

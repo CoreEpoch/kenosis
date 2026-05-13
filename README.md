@@ -11,7 +11,7 @@
 
 ---
 
-Kenosis is a Rust CLI toolkit for quantizing, validating, inspecting, and comparing ONNX models. Its flagship feature is **static INT8 quantization** with ReLU-aware QDQ placement that achieves full QLinearConv fusion on stock ONNX Runtime — no custom operators required.
+Kenosis is a Rust CLI toolkit for quantizing, validating, inspecting, and comparing ONNX models. Its flagship feature is **static INT8 quantization** with activation-aware QDQ placement that achieves up to **2.46× speedup** over FP32 baselines and **65% faster inference** than the ORT Python quantizer — on stock ONNX Runtime, no custom operators required.
 
 > **Read the Technical Whitepaper:** [Activation-Aware Quantization: Achieving Native Kernel Fusion in ONNX via Graph Reordering](docs/whitepaper.md)
 
@@ -33,14 +33,25 @@ The latency figures above represent **isolated, single-threaded compute reductio
 *   **Thread Starvation Prevention:** By executing in ~25ms of compute instead of ~44ms, the OS scheduler can juggle multiple video streams without starving the pipeline.
 *   **The Result:** In a 3-camera stress test on an 8-core edge CPU, FP32 pipelines experience severe thread starvation and memory bottlenecking, driving latency to ~43ms and dropping streams to a jittery 21 fps. Kenosis INT8 pipelines process efficiently enough to sustain **28–29 fps per camera**, demonstrating that static quantization is the key to maximizing camera density on commodity hardware.
 
-### Classifier Benchmarks (Kenosis vs ORT Python Quantizer)
+### Classifier Benchmarks (Kenosis INT8 vs FP32 Baseline)
 
-| Model | Cosine | Kenosis Latency | ORT Latency | Kenosis Advantage |
-|-------|--------|----------------|-------------|-------------------|
-| SqueezeNet 1.1 | 0.999 | **2.82ms** | 4.25ms | **51% faster** |
-| ResNet50 v2 | 0.999 | **38.0ms** | 49.5ms | **24% faster** |
+| Model | Cosine | Kenosis INT8 | FP32 Baseline | Speedup | INT8 Size |
+|-------|--------|--------------|---------------|---------|-----------|
+| SqueezeNet 1.1 | 0.999 | **2.85ms** | 6.60ms | **2.32×** | 1.24 MB (3.8× smaller) |
+| ResNet50 v2 | 0.995 | **27.8ms** | 68.4ms | **2.46×** | 30.6 MB (3.2× smaller) |
+| MobileNetV2 | 0.990 | **4.61ms** | 6.53ms | **1.42×** | 7.10 MB (1.9× smaller) |
+| EfficientNet-Lite4 | 0.983 | **14.2ms** | 26.8ms | **1.89×** | 16.5 MB (3.0× smaller) |
 
-> Kenosis achieves **26/26 QLinearConv fusion** on SqueezeNet (vs ORT's 26/26), plus **8/8 QLinearConcat** and full pool fusion — with fewer residual DequantizeLinear nodes. The advantage comes from ReLU-aware QDQ placement that matches ORT's internal Conv+ReLU fusion patterns.
+### Direct Comparison (Kenosis vs ORT Python Quantizer)
+
+| Model | Kenosis Latency | ORT Latency | Kenosis Advantage |
+|-------|-----------------|-------------|-------------------|
+| SqueezeNet 1.1 | **2.85ms** | 8.13ms | **65% faster** |
+| ResNet50 v2 | **27.8ms** | 46.1ms | **40% faster** |
+| MobileNetV2 | **4.61ms** | 6.29ms | **27% faster** |
+| EfficientNet-Lite4 | **14.2ms** | 23.5ms | **40% faster** |
+
+> The ORT Python quantizer produces a SqueezeNet model that is **slower than FP32** (8.13ms INT8 vs 6.60ms FP32) — broken Conv-ReLU fusion in action. Kenosis eliminates this regression entirely, delivering a 2.32× speedup over FP32.
 
 ## Key Features
 
